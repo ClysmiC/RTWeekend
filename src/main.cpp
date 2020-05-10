@@ -1,44 +1,27 @@
 #include <fstream>
-// #include <iostream>
 #include <math.h>
-// #include <stdlib.h>
 
+#include "main.h"
 
 using namespace std;
 
-struct Vector3
+float Vector3::length() const
 {
-	Vector3() = default;
+	return sqrt(lengthSquared());
+}
 
-	Vector3(float xParam, float yParam, float zParam) :
-		x(xParam),
-		y(yParam),
-		z(zParam)
-	{
-	}
+float Vector3::lengthSquared() const
+{
+	return x * x + y * y + z * z;
+}
 
-	float length()
-	{
-		return sqrt(lengthSquared());
-	}
-
-	float lengthSquared()
-	{
-		return x * x + y * y + z * z;
-	}
-
-	void normalize()
-	{
-		float len = length();
-		x /= len;
-		y /= len;
-		z /= len;
-	}
-
-	float x;
-	float y;
-	float z;
-};
+void Vector3::normalizeInPlace()
+{
+	float len = length();
+	x /= len;
+	y /= len;
+	z /= len;
+}
 
 float dot(const Vector3 & lhs, const Vector3 & rhs)
 {
@@ -54,6 +37,16 @@ Vector3 cross(const Vector3 & lhs, const Vector3 & rhs)
 	);
 }
 
+Vector3 normalize(const Vector3 & v)
+{
+	Vector3 result = v;
+	float len = v.length();
+	result.x /= len;
+	result.y /= len;
+	result.z /= len;
+
+	return result;
+}
 
 Vector3 operator+(Vector3 v)
 {
@@ -125,6 +118,15 @@ Vector3 operator* (float f, Vector3 v)
 	return v * f;
 }
 
+Vector3 operator/(Vector3 v, float f)
+{
+	return Vector3(
+		v.x / f,
+		v.y / f,
+		v.z / f
+	);
+}
+
 ostream & operator<<(ostream & outputStream, Vector3 vector)
 {
 	// Bit of a hack for outputting as color from 0-255
@@ -133,68 +135,103 @@ ostream & operator<<(ostream & outputStream, Vector3 vector)
 	return outputStream;
 }
 
-struct Sphere
+Vector3 randomVectorInsideUnitSphere()
 {
-	Sphere() = default;
-	Sphere(Vector3 center, float radius)
-		: center(center)
-		, radius(radius)
-	{ }
+    // @Slow
+    // Better implementations exist, but this one is the easiest!
 
-	Vector3 center;
-	float radius;
-};
-struct Ray
+    Vector3 result;
+    do
+    {
+        // Random vector where x, y, z are [0-1)
+        result = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
+
+        // Transform x, y, z to be [-1, 1)
+        result *= 2;
+        result -= Vector3(1, 1, 1);
+
+        // Reject if outside unit sphere
+    } while(result.lengthSquared() > 1.0f);
+
+    return result;
+}
+
+float rand0Incl1Excl()
 {
-	Ray() = default;
+	return rand() / (RAND_MAX + 1.0f);
+}
 
-	Ray(Vector3 p0, Vector3 dir)
-		: p0(p0)
-		, dir(dir)
+bool Sphere::testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut) const
+{
+	float a = dot(ray.dir, ray.dir);
+	float b = 2 * (dot(ray.dir, ray.p0) - dot(ray.dir, this->center));
+	float c = dot(ray.p0, ray.p0) + dot(this->center, this->center) - 2 * dot(ray.p0, this->center) - this->radius * this->radius;
+
+	float discriminant = b * b - 4 * a * c;
+	if (discriminant < 0)
+		return false;
+
+	float t0 = (-b - sqrt(discriminant)) / 2 * a;
+	float t1 = (-b + sqrt(discriminant)) / 2 * a;
+
+	if (t0 > tMin && t0 < tMax)
 	{
-		this->dir.normalize();
+		hitOut->t = t0;
+		hitOut->normal = normalize(ray.pointAtT(t0) - this->center);
+		return true;
 	}
-
-	Vector3 pointAtT(float t)
+	else if (t1 > tMin && t1 < tMax)
 	{
-		return p0 + dir * t;
+		hitOut->t = t1;
+		hitOut->normal = normalize(ray.pointAtT(t1) - this->center);
+		return true;
 	}
-
-	bool testSphere(const Sphere & sphere)
+	else
 	{
-		float a = dot(this->dir, this->dir);
-		float b = 2 * (dot(this->dir, this->p0) - dot(this->dir, sphere.center));
-		float c = dot(this->p0, this->p0) + dot(sphere.center, sphere.center) - 2 * dot(this->p0, sphere.center) - sphere.radius * sphere.radius;
-		float discriminant = b * b - 4 * a * c;
-		return discriminant > 0;
+		return false;
 	}
+}
 
-	Vector3 color()
+Vector3 Ray::pointAtT(float t) const
+{
+	return p0 + dir * t;
+}
+
+Vector3 Ray::color(IHitable ** aHitable, int cHitable) const
+{
+	float tClosest = FLT_MAX;
+	HitRecord hitClosest;
+
+	for (int iHitable = 0; iHitable < cHitable; iHitable++)
 	{
-		Sphere sphere(
-			Vector3(0, 0, -1),
-			0.5f);
+		IHitable * pHitable = *(aHitable + iHitable);
 
-		if (dir.z < -0.4)
+		HitRecord hit;
+		if (pHitable->testHit(*this, 0.0001, tClosest, &hit))
 		{
-			bool brk = true;
+			hitClosest = hit;
+			tClosest = hit.t;
 		}
+	}
 
-		if (dir.x < 0.1 && dir.x > -0.1 && dir.y < 0.1 && dir.y > -0.1)
-		{
-			bool brk = true;
-		}
+	bool hit = tClosest < FLT_MAX;
+	if (hit)
+	{
+        Vector3 hitPos = pointAtT(hitClosest.t);
+        Vector3 probeUnitSphereCenter = hitPos + hitClosest.normal;
+        Vector3 probeTarget = probeUnitSphereCenter + randomVectorInsideUnitSphere();
 
-		if (testSphere(sphere))
-			return Vector3(1, 0, 0);
+        Ray probe(hitPos, probeTarget - hitPos);
+		return 0.5 * probe.color(aHitable, cHitable);
+	}
+	else
+	{
+		// blue-white "sky" lerp
 
 		float t = 0.5f * (dir.y + 1);
 		return (1 - t) * Vector3(1, 1, 1) + t * Vector3(0.5f, 0.7f, 1.0f);
 	}
-
-	Vector3 p0;
-	Vector3 dir;
-};
+}
 
 int main()
 {
@@ -220,23 +257,42 @@ int main()
 	float viewWidth = 4;
 	float viewHeight = 2;
 
+	constexpr int COUNT_HITABLES = 2;
+	IHitable * hitables[COUNT_HITABLES];
+	hitables[0] = new Sphere(Vector3(0, 0, -1), 0.5);
+	hitables[1] = new Sphere(Vector3(0, -100.5, -1), 100);
+
 	for (int yPixel = 0; yPixel < heightPixels; yPixel++)
 	{
 		for (int xPixel = 0; xPixel < widthPixels; xPixel++)
 		{
-			if (yPixel == 50 && xPixel == 100)
+			Vector3 colorCumulative;
+
+			constexpr int COUNT_SAMPLES = 100;
+			for (int iSample = 0; iSample < COUNT_SAMPLES; iSample++)
 			{
-				bool brk = true;
+				float perturbX = rand0Incl1Excl();
+				float perturbY = rand0Incl1Excl();
+
+				float xViewNormalized = (xPixel + perturbX) / widthPixels;
+				float yViewNormalized = 1 - ((yPixel + perturbY) / heightPixels);	// Subtract from 1 to get the value in view-space
+
+				Ray ray(
+					origin,
+					viewLowerLeftCorner + xViewNormalized * viewX * viewWidth + yViewNormalized * viewY * viewHeight);
+
+				colorCumulative += ray.color(hitables, COUNT_HITABLES);
 			}
 
-			float xPixelNorm = float(xPixel) / widthPixels;
-			float yPixelNorm = 1 - (float(yPixel) / heightPixels);	// Subtract from 1 to get the value in view-space
 
-			Ray r(
-				origin,
-				viewLowerLeftCorner + xPixelNorm * viewX * viewWidth + yPixelNorm * viewY * viewHeight);
+			Vector3 colorOut = colorCumulative / COUNT_SAMPLES;
 
-			Vector3 colorOut = r.color();
+            // Gamma correct
+
+            colorOut.x = sqrt(colorOut.x);
+            colorOut.y = sqrt(colorOut.y);
+            colorOut.z = sqrt(colorOut.z);
+            
 			file << colorOut << endl;
 		}
 	}
