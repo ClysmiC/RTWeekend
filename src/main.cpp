@@ -171,6 +171,42 @@ Vector3 reflect(const Vector3 & v, const Vector3 & n)
     return result;
 }
 
+bool refractWithSchlickProbability(const Vector3 & v, const Vector3 & n, float refractionIndexFrom, float refractionIndexTo, Vector3 * vecOut)
+{
+    // https://www.scratchapixel.com/lessons/3d-basic-rendering/introduction-to-shading/reflection-refraction-fresnel
+
+
+    Vector3 nAdjusted = n;
+    if (dot(v, n) > 0)
+    {
+        nAdjusted = -n;
+    }
+    
+    float cosThetaIncident = dot(-v, nAdjusted);
+
+	// Reject due to Schlick probability
+
+	{
+		float reflectProb = (1 - refractionIndexTo) / (1 + refractionIndexTo);
+		reflectProb = reflectProb * reflectProb;
+		reflectProb = reflectProb + (1 - reflectProb) * pow(1 - cosThetaIncident, 5);
+
+		if (rand0Incl1Excl() < reflectProb)
+			return false;
+	}
+
+    float refractionRatio = refractionIndexFrom / refractionIndexTo;
+    float k = 1 - refractionRatio * refractionRatio * (1 - cosThetaIncident * cosThetaIncident);
+
+	// Reject due to total internal reflection
+
+	if (k < 0)
+		return false;
+    
+    *vecOut = refractionRatio * v + nAdjusted * (refractionRatio * cosThetaIncident - sqrtf(k));
+	return true;
+}
+
 float rand0Incl1Excl()
 {
 	return rand() / (RAND_MAX + 1.0f);
@@ -284,6 +320,30 @@ bool MetalMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, Vector
     return true;
 }
 
+bool DielectricMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, Vector3 * attenuationOut, Ray * rayScatteredOut) const
+{
+	*attenuationOut = Vector3(1.0, 1.0, 1.0);
+
+	float isInside = dot(ray.dir, hitRecord.normal) > 0;
+
+	float refractiveIndexFrom	=	isInside	?	this->refractiveIndex	:	1.0f;
+	float refractiveIndexTo		=	isInside	?	1.0f					:	this->refractiveIndex;
+
+	Vector3 refracted;
+	if (refractWithSchlickProbability(ray.dir, isInside ? -hitRecord.normal : hitRecord.normal, refractiveIndexFrom, refractiveIndexTo, &refracted))
+	{
+		rayScatteredOut->p0 = ray.pointAtT(hitRecord.t);
+		rayScatteredOut->dir = refracted;
+	}
+	else
+	{
+		rayScatteredOut->p0 = ray.pointAtT(hitRecord.t);
+		rayScatteredOut->dir = reflect(ray.dir, hitRecord.normal);
+	}
+
+	return true;
+}
+
 int main()
 {
 	constexpr int widthPixels = 200;
@@ -308,14 +368,13 @@ int main()
 	float viewWidth = 4;
 	float viewHeight = 2;
 
-	constexpr int COUNT_HITABLES = 4;
+	constexpr int COUNT_HITABLES = 5;
 	IHitable * hitables[COUNT_HITABLES];
 	hitables[0] =
         new Sphere(
             Vector3(0, 0, -1),
             0.5,
-            new LambertianMaterial(
-                Vector3(0.8f, 0.3f, 0.3f)));
+            new LambertianMaterial(Vector3(0.1f, 0.2f, 0.5f)));
 
 
     hitables[1] =
@@ -337,9 +396,13 @@ int main()
         new Sphere(
             Vector3(-1, 0, -1),
             0.5,
-            new MetalMaterial(
-                Vector3(0.8f, 0.8f, 0.8f),
-				0.3f));
+			new DielectricMaterial(1.5f));
+
+	hitables[4] =
+		new Sphere(
+			Vector3(-1, 0, -1),
+			0.45,
+			new DielectricMaterial(1.5f));
 
 	for (int yPixel = 0; yPixel < heightPixels; yPixel++)
 	{

@@ -36,7 +36,9 @@ Vector3 operator* (float f, const Vector3 & v);
 Vector3 operator/ (const Vector3 & v, float f);
 std::ostream & operator<<(std::ostream & outputStream, const Vector3 & vector);
 Vector3 randomVectorInsideUnitSphere();
+
 Vector3 reflect(const Vector3 & v, const Vector3 & n);
+bool refractWithSchlickProbability(const Vector3 & v, const Vector3 & n, float refractionIndexFrom, float refractionIndexTo, Vector3 * vecOut);
 
 float rand0Incl1Excl();
 
@@ -104,6 +106,15 @@ struct MetalMaterial : public IMaterial
     MetalMaterial(const Vector3 & albedo, float fuzziness) : albedo(albedo), fuzziness(fuzziness) { }
 
     bool scatter(const Ray & ray, const HitRecord & hitRecord, Vector3 * attenuationOut, Ray * rayScatteredOut) const override;
+};
+
+struct DielectricMaterial : public IMaterial
+{
+	float refractiveIndex;
+
+	DielectricMaterial(float refractiveIndex) : refractiveIndex(refractiveIndex) { }
+
+	bool scatter(const Ray & ray, const HitRecord & hitRecord, Vector3 * attenuationOut, Ray * rayScatteredOut) const override;
 };
 
 
