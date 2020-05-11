@@ -48,24 +48,24 @@ Vector3 normalize(const Vector3 & v)
 	return result;
 }
 
-Vector3 operator+(Vector3 v)
+Vector3 operator+(const Vector3 & v)
 {
 	return Vector3(v.x, v.y, v.z);
 }
 
-Vector3 operator-(Vector3 v)
+Vector3 operator-(const Vector3 & v)
 {
 	return Vector3(-v.x, -v.y, -v.z);
 }
 
-void operator+=(Vector3 & vLeft, Vector3 vRight)
+void operator+=(Vector3 & vLeft, const Vector3 & vRight)
 {
 	vLeft.x += vRight.x;
 	vLeft.y += vRight.y;
 	vLeft.z += vRight.z;
 }
 
-void operator-=(Vector3 & vLeft, Vector3 vRight)
+void operator-=(Vector3 & vLeft, const Vector3 & vRight)
 {
 	vLeft.x -= vRight.x;
 	vLeft.y -= vRight.y;
@@ -86,7 +86,7 @@ void operator/=(Vector3 & v, float scale)
 	v.z /= scale;
 }
 
-Vector3 operator+ (Vector3 vLeft, Vector3 vRight)
+Vector3 operator+ (const Vector3 & vLeft, const Vector3 & vRight)
 {
 	return Vector3(
 		vLeft.x + vRight.x,
@@ -95,7 +95,7 @@ Vector3 operator+ (Vector3 vLeft, Vector3 vRight)
 	);
 }
 
-Vector3 operator- (Vector3 vLeft, Vector3 vRight)
+Vector3 operator- (const Vector3 & vLeft, const Vector3 & vRight)
 {
 	return Vector3(
 		vLeft.x - vRight.x,
@@ -104,7 +104,16 @@ Vector3 operator- (Vector3 vLeft, Vector3 vRight)
 	);
 }
 
-Vector3 operator* (Vector3 v, float f)
+Vector3 hadamard(const Vector3 & vLeft, const Vector3 & vRight)
+{
+	return Vector3(
+		vLeft.x * vRight.x,
+		vLeft.y * vRight.y,
+		vLeft.z * vRight.z
+	);
+}
+
+Vector3 operator* (const Vector3 & v, float f)
 {
 	return Vector3(
 		v.x * f,
@@ -113,12 +122,12 @@ Vector3 operator* (Vector3 v, float f)
 	);
 }
 
-Vector3 operator* (float f, Vector3 v)
+Vector3 operator* (float f, const Vector3 & v)
 {
 	return v * f;
 }
 
-Vector3 operator/(Vector3 v, float f)
+Vector3 operator/(const Vector3 & v, float f)
 {
 	return Vector3(
 		v.x / f,
@@ -127,7 +136,7 @@ Vector3 operator/(Vector3 v, float f)
 	);
 }
 
-ostream & operator<<(ostream & outputStream, Vector3 vector)
+ostream & operator<<(ostream & outputStream, const Vector3 & vector)
 {
 	// Bit of a hack for outputting as color from 0-255
 
@@ -156,6 +165,12 @@ Vector3 randomVectorInsideUnitSphere()
     return result;
 }
 
+Vector3 reflect(const Vector3 & v, const Vector3 & n)
+{
+    Vector3 result = v - 2 * dot(v, n) * n;
+    return result;
+}
+
 float rand0Incl1Excl()
 {
 	return rand() / (RAND_MAX + 1.0f);
@@ -178,12 +193,14 @@ bool Sphere::testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut
 	{
 		hitOut->t = t0;
 		hitOut->normal = normalize(ray.pointAtT(t0) - this->center);
+        hitOut->hitable = this;
 		return true;
 	}
 	else if (t1 > tMin && t1 < tMax)
 	{
 		hitOut->t = t1;
 		hitOut->normal = normalize(ray.pointAtT(t1) - this->center);
+        hitOut->hitable = this;
 		return true;
 	}
 	else
@@ -197,8 +214,14 @@ Vector3 Ray::pointAtT(float t) const
 	return p0 + dir * t;
 }
 
-Vector3 Ray::color(IHitable ** aHitable, int cHitable) const
+Vector3 Ray::color(IHitable ** aHitable, int cHitable, int rayDepth) const
 {
+    constexpr int MAX_RAY_DEPTH = 50;
+    if (rayDepth > MAX_RAY_DEPTH)
+    {
+        return Vector3(0, 0, 0);
+    }
+    
 	float tClosest = FLT_MAX;
 	HitRecord hitClosest;
 
@@ -217,12 +240,17 @@ Vector3 Ray::color(IHitable ** aHitable, int cHitable) const
 	bool hit = tClosest < FLT_MAX;
 	if (hit)
 	{
-        Vector3 hitPos = pointAtT(hitClosest.t);
-        Vector3 probeUnitSphereCenter = hitPos + hitClosest.normal;
-        Vector3 probeTarget = probeUnitSphereCenter + randomVectorInsideUnitSphere();
-
-        Ray probe(hitPos, probeTarget - hitPos);
-		return 0.5 * probe.color(aHitable, cHitable);
+        Vector3 attenuation;
+        Ray rayScattered;
+        
+        if (hitClosest.hitable->material->scatter(*this, hitClosest, &attenuation, &rayScattered))
+        {
+            return hadamard(attenuation, rayScattered.color(aHitable, cHitable, rayDepth + 1));
+        }
+        else
+        {
+            return Vector3(0, 0, 0);
+        }
 	}
 	else
 	{
@@ -231,6 +259,29 @@ Vector3 Ray::color(IHitable ** aHitable, int cHitable) const
 		float t = 0.5f * (dir.y + 1);
 		return (1 - t) * Vector3(1, 1, 1) + t * Vector3(0.5f, 0.7f, 1.0f);
 	}
+}
+
+bool LambertianMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, Vector3 * attenuationOut, Ray * rayScatteredOut) const
+{
+    if (dot(ray.dir, hitRecord.normal) > 0)
+        return false;
+    
+    Vector3 hitPos = ray.pointAtT(hitRecord.t);
+    Vector3 probeUnitSphereCenter = hitPos + hitRecord.normal;
+    *rayScatteredOut = Ray(hitPos, probeUnitSphereCenter + randomVectorInsideUnitSphere() - hitPos);
+    *attenuationOut = albedo;
+    return true;
+}
+
+bool MetalMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, Vector3 * attenuationOut, Ray * rayScatteredOut) const
+{
+    if (dot(ray.dir, hitRecord.normal) > 0)
+        return false;
+    
+    Vector3 hitPos = ray.pointAtT(hitRecord.t);
+    *rayScatteredOut = Ray(hitPos, reflect(ray.dir, hitRecord.normal) + fuzziness * randomVectorInsideUnitSphere());
+    *attenuationOut = albedo;
+    return true;
 }
 
 int main()
@@ -257,10 +308,38 @@ int main()
 	float viewWidth = 4;
 	float viewHeight = 2;
 
-	constexpr int COUNT_HITABLES = 2;
+	constexpr int COUNT_HITABLES = 4;
 	IHitable * hitables[COUNT_HITABLES];
-	hitables[0] = new Sphere(Vector3(0, 0, -1), 0.5);
-	hitables[1] = new Sphere(Vector3(0, -100.5, -1), 100);
+	hitables[0] =
+        new Sphere(
+            Vector3(0, 0, -1),
+            0.5,
+            new LambertianMaterial(
+                Vector3(0.8f, 0.3f, 0.3f)));
+
+
+    hitables[1] =
+        new Sphere(
+            Vector3(0, -100.5f, -1),
+            100,
+            new LambertianMaterial(
+                Vector3(0.8f, 0.8f, 0.0f)));
+
+    hitables[2] =
+        new Sphere(
+            Vector3(1, 0, -1),
+            0.5,
+            new MetalMaterial(
+                Vector3(0.8f, 0.6f, 0.2f),
+				1.0f));
+
+    hitables[3] =
+        new Sphere(
+            Vector3(-1, 0, -1),
+            0.5,
+            new MetalMaterial(
+                Vector3(0.8f, 0.8f, 0.8f),
+				0.3f));
 
 	for (int yPixel = 0; yPixel < heightPixels; yPixel++)
 	{
@@ -281,7 +360,7 @@ int main()
 					origin,
 					viewLowerLeftCorner + xViewNormalized * viewX * viewWidth + yViewNormalized * viewY * viewHeight);
 
-				colorCumulative += ray.color(hitables, COUNT_HITABLES);
+				colorCumulative += ray.color(hitables, COUNT_HITABLES, 0);
 			}
 
 
