@@ -35,7 +35,9 @@ Vector3 operator* (const Vector3 & v, float f);
 Vector3 operator* (float f, const Vector3 & v);
 Vector3 operator/ (const Vector3 & v, float f);
 std::ostream & operator<<(std::ostream & outputStream, const Vector3 & vector);
+
 Vector3 randomVectorInsideUnitSphere();
+Vector3 randomVectorInsideUnitDisk();
 
 Vector3 reflect(const Vector3 & v, const Vector3 & n);
 bool refractWithSchlickProbability(const Vector3 & v, const Vector3 & n, float refractionIndexFrom, float refractionIndexTo, Vector3 * vecOut);
@@ -54,6 +56,29 @@ struct Ray
 	Vector3 color(IHitable ** aHitable, int cHitable, int rayDepth) const;
 };
 
+struct Camera
+{
+    Vector3 pos;
+    Vector3 forward;
+    Vector3 right;
+    Vector3 up;
+
+    float fovDeg;
+    float aspectRatio;
+    float lensRadius;
+
+    // View plane information
+
+    Vector3 botLeftViewPosCached;
+    Vector3 topRightViewPosCached;
+    float wCached;
+    float hCached;
+
+    
+    Camera(Vector3 pos, Vector3 lookat, float fovDeg, float aspectRatio, float lensRadius);
+
+    Ray rayAt(float s, float t);
+};
 
 struct HitRecord
 {

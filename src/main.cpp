@@ -150,17 +150,42 @@ Vector3 randomVectorInsideUnitSphere()
     // Better implementations exist, but this one is the easiest!
 
     Vector3 result;
-    do
+    while (true)
     {
         // Random vector where x, y, z are [0-1)
+        
         result = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
 
         // Transform x, y, z to be [-1, 1)
+        
         result *= 2;
         result -= Vector3(1, 1, 1);
 
-        // Reject if outside unit sphere
-    } while(result.lengthSquared() > 1.0f);
+        // Only accept if inside unit sphere
+
+        if (result.lengthSquared() <= 1.0f)
+            break;
+    }
+
+    return result;
+}
+
+Vector3 randomVectorInsideUnitDisk()
+{
+    // @Slow
+    // Better implementations exist, but this one is the easiest!
+
+    Vector3 result;
+    while (true)
+    {
+        
+        result = Vector3(rand0Incl1Excl() * 2 - 1, rand0Incl1Excl() * 2 - 1, 0);
+
+        // Only accept if inside unit disk
+
+        if (result.lengthSquared() <= 1.0f)
+            break;
+    }
 
     return result;
 }
@@ -266,7 +291,7 @@ Vector3 Ray::color(IHitable ** aHitable, int cHitable, int rayDepth) const
 		IHitable * pHitable = *(aHitable + iHitable);
 
 		HitRecord hit;
-		if (pHitable->testHit(*this, 0.0001, tClosest, &hit))
+		if (pHitable->testHit(*this, 0.0001f, tClosest, &hit))
 		{
 			hitClosest = hit;
 			tClosest = hit.t;
@@ -344,10 +369,45 @@ bool DielectricMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, V
 	return true;
 }
 
+Camera::Camera(Vector3 pos, Vector3 lookAt, float fovDeg, float aspectRatio, float lensRadius)
+    : pos(pos), fovDeg(fovDeg), aspectRatio(aspectRatio), lensRadius(lensRadius)
+{
+    this->forward = normalize(lookAt - pos);
+    this->right = normalize(cross(this->forward, Vector3(0, 1, 0)));	// NOTE: Assuming <0, 1, 0> is the "up vector" that most camera API's ask for.
+    this->up = normalize(cross(this->right, this->forward));
+
+    float fovRad = fovDeg * 3.14159f / 180;
+    
+	// halfUnitH and halfUnitW are in a space where the plane is 1 unit in front of the camera (before it gets scaled up by focusDistance)
+
+    float halfUnitH = tan(fovRad / 2);
+    float halfUnitW = halfUnitH * aspectRatio;
+
+	float focusDistance = (lookAt - pos).length();
+    this->botLeftViewPosCached = this->pos + (this->forward - this->right * halfUnitW - this->up * halfUnitH) * focusDistance;
+    this->topRightViewPosCached = this->pos + (this->forward + this->right * halfUnitW + this->up * halfUnitH) * focusDistance;
+    this->wCached = halfUnitW * 2 * focusDistance;
+    this->hCached = halfUnitH * 2 * focusDistance;
+}
+
+Ray Camera::rayAt(float s, float t)
+{
+	Vector3 p0 = this->pos + this->lensRadius * randomVectorInsideUnitDisk();
+    Ray result(
+        p0,
+        (this->botLeftViewPosCached + s * this->wCached * this->right + t * this->hCached * this->up) - p0);
+
+    return result;
+}
+
 int main()
 {
-	constexpr int widthPixels = 200;
-	constexpr int heightPixels = 100;
+	constexpr int widthPixels = 800;
+	constexpr int heightPixels = 400;
+	constexpr float fov = 20;
+    constexpr float aspectRatio = widthPixels / float(heightPixels);
+	constexpr float lensRadius = 0.05;	// Is this way too big?
+	constexpr int COUNT_SAMPLES_PER_PIXEL = 200;
 
 	ofstream file;
 	file.open("output.ppm");
@@ -355,54 +415,53 @@ int main()
 	file << widthPixels << " " << heightPixels << endl;
 	file << 255 << endl;
 
-	// Camera is at origin
-	// Viewing plane is right-handed: +X right, +Y up, +Z out
-	// Viewing plane is at Z = -1
-	// Viewing plane spans X from -2 to 2
-	// Viewing plane spans Y from -1 to 1
+	constexpr int MAX_COUNT_HITABLES = 512;
+	IHitable * hitables[MAX_COUNT_HITABLES];
 
-	Vector3 origin(0, 0, 0);
-	Vector3 viewLowerLeftCorner(-2, -1, -1);
-	Vector3 viewX(1, 0, 0);
-	Vector3 viewY(0, 1, 0);
-	float viewWidth = 4;
-	float viewHeight = 2;
+	int countHitables = 0;
 
-	constexpr int COUNT_HITABLES = 5;
-	IHitable * hitables[COUNT_HITABLES];
-	hitables[0] =
-        new Sphere(
-            Vector3(0, 0, -1),
-            0.5,
-            new LambertianMaterial(Vector3(0.1f, 0.2f, 0.5f)));
+	// The code to generate this scene is almost entirely ripped from the text. I'm not super interested in how the scene is generated... just in the rendering of it!
 
+	{
+		hitables[countHitables++] = new Sphere(Vector3(0, -1000, 0), 1000, new LambertianMaterial(Vector3(0.5f, 0.5f, 0.5f)));
 
-    hitables[1] =
-        new Sphere(
-            Vector3(0, -100.5f, -1),
-            100,
-            new LambertianMaterial(
-                Vector3(0.8f, 0.8f, 0.0f)));
+		int i = 1;
+		for (int a = -11; a < 11; a++) {
+			for (int b = -11; b < 11; b++) {
+				auto choose_mat = rand0Incl1Excl();
+				Vector3 center(a + 0.9 * rand0Incl1Excl(), 0.2, b + 0.9 * rand0Incl1Excl());
+				if ((center - Vector3(4, 0.2, 0)).length() > 0.9) {
+					if (choose_mat < 0.8) {
+						// diffuse
+						auto albedo = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
+						hitables[countHitables++] = new Sphere(center, 0.2, new LambertianMaterial(albedo));
+					}
+					else if (choose_mat < 0.95) {
+						// metal
+						auto albedo = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
+						albedo = albedo / 2.0f + Vector3(0.5, 0.5, 0.5);
+						auto fuzz = rand0Incl1Excl() / 2.0f;
+						hitables[countHitables++] = new Sphere(center, 0.2, new MetalMaterial(albedo, fuzz));
+					}
+					else {
+						// glass
+						hitables[countHitables++] = new Sphere(center, 0.2, new DielectricMaterial(1.5));
+					}
+				}
+			}
+		}
 
-    hitables[2] =
-        new Sphere(
-            Vector3(1, 0, -1),
-            0.5,
-            new MetalMaterial(
-                Vector3(0.8f, 0.6f, 0.2f),
-				1.0f));
+		hitables[countHitables++] = new Sphere(Vector3(0, 1, 0), 1.0, new DielectricMaterial(1.5));
+		hitables[countHitables++] = new Sphere(Vector3(-4, 1, 0), 1.0, new LambertianMaterial(Vector3(0.4, 0.2, 0.1)));
+		hitables[countHitables++] = new Sphere(Vector3(4, 1, 0), 1.0, new MetalMaterial(Vector3(0.7, 0.6, 0.5), 0.0));
+	}
 
-    hitables[3] =
-        new Sphere(
-            Vector3(-1, 0, -1),
-            0.5,
-			new DielectricMaterial(1.5f));
-
-	hitables[4] =
-		new Sphere(
-			Vector3(-1, 0, -1),
-			0.45,
-			new DielectricMaterial(1.5f));
+    Camera cam(
+        Vector3(13, 2, 3),
+        Vector3(0, 0, 0),
+        fov,
+		aspectRatio,
+		lensRadius);
 
 	for (int yPixel = 0; yPixel < heightPixels; yPixel++)
 	{
@@ -410,8 +469,7 @@ int main()
 		{
 			Vector3 colorCumulative;
 
-			constexpr int COUNT_SAMPLES = 100;
-			for (int iSample = 0; iSample < COUNT_SAMPLES; iSample++)
+			for (int iSample = 0; iSample < COUNT_SAMPLES_PER_PIXEL; iSample++)
 			{
 				float perturbX = rand0Incl1Excl();
 				float perturbY = rand0Incl1Excl();
@@ -419,15 +477,11 @@ int main()
 				float xViewNormalized = (xPixel + perturbX) / widthPixels;
 				float yViewNormalized = 1 - ((yPixel + perturbY) / heightPixels);	// Subtract from 1 to get the value in view-space
 
-				Ray ray(
-					origin,
-					viewLowerLeftCorner + xViewNormalized * viewX * viewWidth + yViewNormalized * viewY * viewHeight);
-
-				colorCumulative += ray.color(hitables, COUNT_HITABLES, 0);
+				Ray ray = cam.rayAt(xViewNormalized, yViewNormalized);
+				colorCumulative += ray.color(hitables, countHitables, 0);
 			}
 
-
-			Vector3 colorOut = colorCumulative / COUNT_SAMPLES;
+			Vector3 colorOut = colorCumulative / COUNT_SAMPLES_PER_PIXEL;
 
             // Gamma correct
 
