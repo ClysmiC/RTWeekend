@@ -239,9 +239,11 @@ float rand0Incl1Excl()
 
 bool Sphere::testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut) const
 {
+	Vector3 center = posAtTime(ray.time);
+
 	float a = dot(ray.dir, ray.dir);
-	float b = 2 * (dot(ray.dir, ray.p0) - dot(ray.dir, this->center));
-	float c = dot(ray.p0, ray.p0) + dot(this->center, this->center) - 2 * dot(ray.p0, this->center) - this->radius * this->radius;
+	float b = 2 * (dot(ray.dir, ray.p0) - dot(ray.dir, center));
+	float c = dot(ray.p0, ray.p0) + dot(center, center) - 2 * dot(ray.p0, center) - this->radius * this->radius;
 
 	float discriminant = b * b - 4 * a * c;
 	if (discriminant < 0)
@@ -253,14 +255,14 @@ bool Sphere::testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut
 	if (t0 > tMin && t0 < tMax)
 	{
 		hitOut->t = t0;
-		hitOut->normal = normalize(ray.pointAtT(t0) - this->center);
+		hitOut->normal = normalize(ray.pointAtT(t0) - center);
         hitOut->hitable = this;
 		return true;
 	}
 	else if (t1 > tMin && t1 < tMax)
 	{
 		hitOut->t = t1;
-		hitOut->normal = normalize(ray.pointAtT(t1) - this->center);
+		hitOut->normal = normalize(ray.pointAtT(t1) - center);
         hitOut->hitable = this;
 		return true;
 	}
@@ -268,6 +270,11 @@ bool Sphere::testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut
 	{
 		return false;
 	}
+}
+
+Vector3 Sphere::posAtTime(float time) const
+{
+	return p0Center + velocity * time;
 }
 
 Vector3 Ray::pointAtT(float t) const
@@ -329,7 +336,7 @@ bool LambertianMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, V
     
     Vector3 hitPos = ray.pointAtT(hitRecord.t);
     Vector3 probeUnitSphereCenter = hitPos + hitRecord.normal;
-    *rayScatteredOut = Ray(hitPos, probeUnitSphereCenter + randomVectorInsideUnitSphere() - hitPos);
+    *rayScatteredOut = Ray(hitPos, probeUnitSphereCenter + randomVectorInsideUnitSphere() - hitPos, ray.time);
     *attenuationOut = albedo;
     return true;
 }
@@ -340,7 +347,7 @@ bool MetalMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, Vector
         return false;
     
     Vector3 hitPos = ray.pointAtT(hitRecord.t);
-    *rayScatteredOut = Ray(hitPos, reflect(ray.dir, hitRecord.normal) + fuzziness * randomVectorInsideUnitSphere());
+    *rayScatteredOut = Ray(hitPos, reflect(ray.dir, hitRecord.normal) + fuzziness * randomVectorInsideUnitSphere(), ray.time);
     *attenuationOut = albedo;
     return true;
 }
@@ -369,8 +376,13 @@ bool DielectricMaterial::scatter(const Ray & ray, const HitRecord & hitRecord, V
 	return true;
 }
 
-Camera::Camera(Vector3 pos, Vector3 lookAt, float fovDeg, float aspectRatio, float lensRadius)
-    : pos(pos), fovDeg(fovDeg), aspectRatio(aspectRatio), lensRadius(lensRadius)
+Camera::Camera(Vector3 pos, Vector3 lookAt, float fovDeg, float aspectRatio, float lensRadius, float time0, float time1)
+    : pos(pos)
+	, fovDeg(fovDeg)
+	, aspectRatio(aspectRatio)
+	, lensRadius(lensRadius)
+	, time0(time0)
+	, time1(time1)
 {
     this->forward = normalize(lookAt - pos);
     this->right = normalize(cross(this->forward, Vector3(0, 1, 0)));	// NOTE: Assuming <0, 1, 0> is the "up vector" that most camera API's ask for.
@@ -395,7 +407,8 @@ Ray Camera::rayAt(float s, float t)
 	Vector3 p0 = this->pos + this->lensRadius * randomVectorInsideUnitDisk();
     Ray result(
         p0,
-        (this->botLeftViewPosCached + s * this->wCached * this->right + t * this->hCached * this->up) - p0);
+        (this->botLeftViewPosCached + s * this->wCached * this->right + t * this->hCached * this->up) - p0,
+		lerp(time0, time1, rand0Incl1Excl()));
 
     return result;
 }
@@ -404,10 +417,12 @@ int main()
 {
 	constexpr int widthPixels = 800;
 	constexpr int heightPixels = 400;
-	constexpr float fov = 20;
+	constexpr float fov = 20.0f;
     constexpr float aspectRatio = widthPixels / float(heightPixels);
-	constexpr float lensRadius = 0.05;	// Is this way too big?
-	constexpr int COUNT_SAMPLES_PER_PIXEL = 200;
+	constexpr float lensRadius = 0.05f;
+	constexpr int COUNT_SAMPLES_PER_PIXEL = 100;
+	constexpr float time0 = 0;
+	constexpr float time1 = 1;
 
 	ofstream file;
 	file.open("output.ppm");
@@ -423,37 +438,57 @@ int main()
 	// The code to generate this scene is almost entirely ripped from the text. I'm not super interested in how the scene is generated... just in the rendering of it!
 
 	{
-		hitables[countHitables++] = new Sphere(Vector3(0, -1000, 0), 1000, new LambertianMaterial(Vector3(0.5f, 0.5f, 0.5f)));
+		// Ground sphere
+
+		hitables[countHitables++] =
+			new Sphere(
+				Vector3(0, -1000, 0),
+				1000,
+				new LambertianMaterial(
+					Vector3(0.5f, 0.5f, 0.5f)),
+				kZero);
+
+		// Little spheres
 
 		int i = 1;
-		for (int a = -11; a < 11; a++) {
-			for (int b = -11; b < 11; b++) {
+		for (int a = -11; a < 11; a++)
+		{
+			for (int b = -11; b < 11; b++)
+			{
 				auto choose_mat = rand0Incl1Excl();
-				Vector3 center(a + 0.9 * rand0Incl1Excl(), 0.2, b + 0.9 * rand0Incl1Excl());
-				if ((center - Vector3(4, 0.2, 0)).length() > 0.9) {
-					if (choose_mat < 0.8) {
+				float radius = 0.2f;
+				Vector3 center(a + 0.9f * rand0Incl1Excl(), 0.2f, b + 0.9f * rand0Incl1Excl());
+				Vector3 vel(0, radius / 2, 0);
+				if ((center - Vector3(4, 0.2f, 0)).length() > 1.8f)
+				{
+					if (choose_mat < 0.8f)
+					{
 						// diffuse
 						auto albedo = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
-						hitables[countHitables++] = new Sphere(center, 0.2, new LambertianMaterial(albedo));
+						hitables[countHitables++] = new Sphere(center, radius, new LambertianMaterial(albedo), vel);
 					}
-					else if (choose_mat < 0.95) {
+					else if (choose_mat < 0.95f)
+					{
 						// metal
 						auto albedo = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
-						albedo = albedo / 2.0f + Vector3(0.5, 0.5, 0.5);
+						albedo = albedo / 2.0f + Vector3(0.5f, 0.5f, 0.5f);
 						auto fuzz = rand0Incl1Excl() / 2.0f;
-						hitables[countHitables++] = new Sphere(center, 0.2, new MetalMaterial(albedo, fuzz));
+						hitables[countHitables++] = new Sphere(center, radius, new MetalMaterial(albedo, fuzz), vel);
 					}
-					else {
+					else
+					{
 						// glass
-						hitables[countHitables++] = new Sphere(center, 0.2, new DielectricMaterial(1.5));
+						hitables[countHitables++] = new Sphere(center, radius, new DielectricMaterial(1.5f), vel);
 					}
 				}
 			}
 		}
 
-		hitables[countHitables++] = new Sphere(Vector3(0, 1, 0), 1.0, new DielectricMaterial(1.5));
-		hitables[countHitables++] = new Sphere(Vector3(-4, 1, 0), 1.0, new LambertianMaterial(Vector3(0.4, 0.2, 0.1)));
-		hitables[countHitables++] = new Sphere(Vector3(4, 1, 0), 1.0, new MetalMaterial(Vector3(0.7, 0.6, 0.5), 0.0));
+		// Big spheres
+
+		hitables[countHitables++] = new Sphere(Vector3(0, 1, 0), 1.0f, new DielectricMaterial(1.5f), kZero);
+		hitables[countHitables++] = new Sphere(Vector3(-4, 1, 0), 1.0f, new LambertianMaterial(Vector3(0.4f, 0.2f, 0.1f)), kZero);
+		hitables[countHitables++] = new Sphere(Vector3(4, 1, 0), 1.0f, new MetalMaterial(Vector3(0.7f, 0.6f, 0.5f), 0.0f), kZero);
 	}
 
     Camera cam(
@@ -461,7 +496,9 @@ int main()
         Vector3(0, 0, 0),
         fov,
 		aspectRatio,
-		lensRadius);
+		lensRadius,
+		time0,
+		time1);
 
 	for (int yPixel = 0; yPixel < heightPixels; yPixel++)
 	{
