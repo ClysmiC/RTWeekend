@@ -1,9 +1,11 @@
 #pragma once
 
+#include "als/als.h"
 #include <ostream>
 
-struct IHitable;
+struct IHittable;
 struct IMaterial;
+struct BvhNode;
 
 enum KZERO
 {
@@ -12,9 +14,17 @@ enum KZERO
 
 struct Vector3
 {
-	float x;
-	float y;
-	float z;
+    union
+    {
+        struct
+        {
+            float x;
+            float y;
+            float z;
+        };
+
+        float elements[3];
+    };
 
 	Vector3() : x(0), y(0), z(0) { }
     Vector3(KZERO) : x(0), y(0), z(0) { }
@@ -66,7 +76,20 @@ struct Ray
 	Ray(Vector3 p0, Vector3 dir, float time) : p0(p0), dir(normalize(dir)), time(time) { }
 
 	Vector3 pointAtT(float t) const;
-	Vector3 color(IHitable ** aHitable, int cHitable, int rayDepth) const;
+	// Vector3 color(IHittable ** aHittable, int cHittable, int rayDepth) const;
+    Vector3 color(BvhNode * bvhNode, int rayDepth) const;
+};
+
+struct Aabb
+{
+    Vector3 min;
+    Vector3 max;
+
+    Aabb() : min(), max() { };
+    Aabb(Vector3 p0, Vector3 p1);
+    Aabb(Aabb aabb0, Aabb aabb1);
+
+    bool testHit(const Ray & ray, float tMin, float tMax) const;
 };
 
 struct Camera
@@ -109,22 +132,23 @@ struct HitRecord
 {
 	float t;
 	Vector3 normal;
-    const IHitable * hitable;
+    const IHittable * hittable;
 
-	HitRecord() : t(0), normal(), hitable(nullptr) {}
+	HitRecord() : t(0), normal(), hittable(nullptr) {}
 };
 
-struct IHitable
+struct IHittable
 {
     IMaterial * material;
 
-    IHitable(IMaterial * material) : material(material) { }
+    IHittable(IMaterial * material) : material(material) { }
     
 	virtual bool testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut) const = 0;
+    virtual bool tryComputeBoundingBox(float t0, float t1, Aabb * aabbOut) const = 0;
 };
 
 
-struct Sphere : public IHitable
+struct Sphere : public IHittable
 {
 	Vector3 p0Center;
     Vector3 velocity;
@@ -132,15 +156,30 @@ struct Sphere : public IHitable
 	float radius;
 
     Sphere(Vector3 p0Center, float radius, IMaterial * material, Vector3 velocity)
-        : IHitable(material)
+        : IHittable(material)
         , p0Center(p0Center)
         , radius(radius)
         , velocity(velocity)
     { }
 
 	bool testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut) const override;
+    bool tryComputeBoundingBox(float t0, float t1, Aabb * aabbOut) const override;
     Vector3 posAtTime(float time) const;
 };
+
+struct BvhNode : public IHittable
+{
+    IHittable * left;
+    IHittable * right;
+    Aabb aabb;
+
+    BvhNode(IHittable * left, IHittable * right);
+
+    bool testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut) const override;
+    bool tryComputeBoundingBox(float t0, float t1, Aabb * aabbOut) const override;
+};
+
+BvhNode * buildBvh(IHittable ** aHittable, int cHittable);
 
 struct IMaterial
 {

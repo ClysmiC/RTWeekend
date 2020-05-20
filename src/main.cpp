@@ -256,20 +256,34 @@ bool Sphere::testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut
 	{
 		hitOut->t = t0;
 		hitOut->normal = normalize(ray.pointAtT(t0) - center);
-        hitOut->hitable = this;
+        hitOut->hittable = this;
 		return true;
 	}
 	else if (t1 > tMin && t1 < tMax)
 	{
 		hitOut->t = t1;
 		hitOut->normal = normalize(ray.pointAtT(t1) - center);
-        hitOut->hitable = this;
+        hitOut->hittable = this;
 		return true;
 	}
 	else
 	{
 		return false;
 	}
+}
+
+bool Sphere::tryComputeBoundingBox(float t0, float t1, Aabb * aabbOut) const
+{
+	float dT = t1 - t0;
+	Vector3 p1Center = p0Center + dT * velocity;
+
+	Vector3 vecRadius = Vector3(radius, radius, radius);
+
+	Aabb aabb0(p0Center + vecRadius, p0Center - vecRadius);
+	Aabb aabb1(p1Center + vecRadius, p0Center - vecRadius);
+
+	*aabbOut = Aabb(aabb0, aabb1);
+    return true;
 }
 
 Vector3 Sphere::posAtTime(float time) const
@@ -282,7 +296,7 @@ Vector3 Ray::pointAtT(float t) const
 	return p0 + dir * t;
 }
 
-Vector3 Ray::color(IHitable ** aHitable, int cHitable, int rayDepth) const
+Vector3 Ray::color(BvhNode * bvhNode, int rayDepth) const
 {
     constexpr int MAX_RAY_DEPTH = 50;
     if (rayDepth > MAX_RAY_DEPTH)
@@ -291,29 +305,17 @@ Vector3 Ray::color(IHitable ** aHitable, int cHitable, int rayDepth) const
     }
     
 	float tClosest = FLT_MAX;
-	HitRecord hitClosest;
+	HitRecord hit;
+	bool hitSuccess = bvhNode->testHit(*this, 0.0001f, FLT_MAX, &hit);
 
-	for (int iHitable = 0; iHitable < cHitable; iHitable++)
-	{
-		IHitable * pHitable = *(aHitable + iHitable);
-
-		HitRecord hit;
-		if (pHitable->testHit(*this, 0.0001f, tClosest, &hit))
-		{
-			hitClosest = hit;
-			tClosest = hit.t;
-		}
-	}
-
-	bool hit = tClosest < FLT_MAX;
-	if (hit)
+	if (hitSuccess)
 	{
         Vector3 attenuation;
         Ray rayScattered;
         
-        if (hitClosest.hitable->material->scatter(*this, hitClosest, &attenuation, &rayScattered))
+        if (hit.hittable->material->scatter(*this, hit, &attenuation, &rayScattered))
         {
-            return hadamard(attenuation, rayScattered.color(aHitable, cHitable, rayDepth + 1));
+            return hadamard(attenuation, rayScattered.color(bvhNode, rayDepth + 1));
         }
         else
         {
@@ -415,8 +417,8 @@ Ray Camera::rayAt(float s, float t)
 
 int main()
 {
-	constexpr int widthPixels = 800;
-	constexpr int heightPixels = 400;
+	constexpr int widthPixels = 400;
+	constexpr int heightPixels = 200;
 	constexpr float fov = 20.0f;
     constexpr float aspectRatio = widthPixels / float(heightPixels);
 	constexpr float lensRadius = 0.05f;
@@ -430,17 +432,17 @@ int main()
 	file << widthPixels << " " << heightPixels << endl;
 	file << 255 << endl;
 
-	constexpr int MAX_COUNT_HITABLES = 512;
-	IHitable * hitables[MAX_COUNT_HITABLES];
+	constexpr int MAX_COUNT_HITTABLES = 512;
+	IHittable * hittables[MAX_COUNT_HITTABLES];
 
-	int countHitables = 0;
+	int countHittables = 0;
 
 	// The code to generate this scene is almost entirely ripped from the text. I'm not super interested in how the scene is generated... just in the rendering of it!
 
 	{
 		// Ground sphere
 
-		hitables[countHitables++] =
+		hittables[countHittables++] =
 			new Sphere(
 				Vector3(0, -1000, 0),
 				1000,
@@ -458,14 +460,15 @@ int main()
 				auto choose_mat = rand0Incl1Excl();
 				float radius = 0.2f;
 				Vector3 center(a + 0.9f * rand0Incl1Excl(), 0.2f, b + 0.9f * rand0Incl1Excl());
-				Vector3 vel(0, radius / 2, 0);
+
 				if ((center - Vector3(4, 0.2f, 0)).length() > 1.8f)
 				{
 					if (choose_mat < 0.8f)
 					{
 						// diffuse
+						Vector3 vel(0, rand0Incl1Excl() * 0.5f, 0);
 						auto albedo = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
-						hitables[countHitables++] = new Sphere(center, radius, new LambertianMaterial(albedo), vel);
+						hittables[countHittables++] = new Sphere(center, radius, new LambertianMaterial(albedo), vel);
 					}
 					else if (choose_mat < 0.95f)
 					{
@@ -473,12 +476,12 @@ int main()
 						auto albedo = Vector3(rand0Incl1Excl(), rand0Incl1Excl(), rand0Incl1Excl());
 						albedo = albedo / 2.0f + Vector3(0.5f, 0.5f, 0.5f);
 						auto fuzz = rand0Incl1Excl() / 2.0f;
-						hitables[countHitables++] = new Sphere(center, radius, new MetalMaterial(albedo, fuzz), vel);
+						hittables[countHittables++] = new Sphere(center, radius, new MetalMaterial(albedo, fuzz), kZero);
 					}
 					else
 					{
 						// glass
-						hitables[countHitables++] = new Sphere(center, radius, new DielectricMaterial(1.5f), vel);
+						hittables[countHittables++] = new Sphere(center, radius, new DielectricMaterial(1.5f), kZero);
 					}
 				}
 			}
@@ -486,9 +489,9 @@ int main()
 
 		// Big spheres
 
-		hitables[countHitables++] = new Sphere(Vector3(0, 1, 0), 1.0f, new DielectricMaterial(1.5f), kZero);
-		hitables[countHitables++] = new Sphere(Vector3(-4, 1, 0), 1.0f, new LambertianMaterial(Vector3(0.4f, 0.2f, 0.1f)), kZero);
-		hitables[countHitables++] = new Sphere(Vector3(4, 1, 0), 1.0f, new MetalMaterial(Vector3(0.7f, 0.6f, 0.5f), 0.0f), kZero);
+		hittables[countHittables++] = new Sphere(Vector3(0, 1, 0), 1.0f, new DielectricMaterial(1.5f), kZero);
+		hittables[countHittables++] = new Sphere(Vector3(-4, 1, 0), 1.0f, new LambertianMaterial(Vector3(0.4f, 0.2f, 0.1f)), kZero);
+		hittables[countHittables++] = new Sphere(Vector3(4, 1, 0), 1.0f, new MetalMaterial(Vector3(0.7f, 0.6f, 0.5f), 0.0f), kZero);
 	}
 
     Camera cam(
@@ -499,6 +502,8 @@ int main()
 		lensRadius,
 		time0,
 		time1);
+
+	BvhNode * bvh = buildBvh(hittables, countHittables);
 
 	for (int yPixel = 0; yPixel < heightPixels; yPixel++)
 	{
@@ -515,7 +520,7 @@ int main()
 				float yViewNormalized = 1 - ((yPixel + perturbY) / heightPixels);	// Subtract from 1 to get the value in view-space
 
 				Ray ray = cam.rayAt(xViewNormalized, yViewNormalized);
-				colorCumulative += ray.color(hitables, countHitables, 0);
+				colorCumulative += ray.color(bvh, 0);
 			}
 
 			Vector3 colorOut = colorCumulative / COUNT_SAMPLES_PER_PIXEL;
@@ -532,4 +537,153 @@ int main()
 
 	file.close();
 	return 0;
+}
+
+bool BvhNode::testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut) const
+{
+    if (!aabb.testHit(ray, tMin, tMax))
+        return false;
+
+    // This relies on testHit not modifying the contents of hitOut if it returns false
+    
+    bool hitLeft = left->testHit(ray, tMin, tMax, hitOut);
+    bool hitRight = right->testHit(ray, tMin, hitLeft ? hitOut->t : tMax, hitOut);
+
+    return hitLeft || hitRight;
+}
+
+bool BvhNode::tryComputeBoundingBox(float t0, float t1, Aabb * aabbOut) const
+{
+    *aabbOut = aabb;
+    return true;
+}
+
+BvhNode::BvhNode(IHittable * left, IHittable * right)
+    : IHittable(nullptr)
+	, left(left)
+    , right(right)
+{
+    Aabb aabbLeft;
+    Aabb aabbRight;
+    
+    Verify(left->tryComputeBoundingBox(0, 0, &aabbLeft));
+    Verify(right->tryComputeBoundingBox(0, 0, &aabbRight));
+
+    aabb = Aabb(aabbLeft, aabbRight);
+}
+
+static int compareByAxis(IHittable * const& h0, IHittable * const& h1, int axis)
+{
+    Aabb aabb0;
+    Aabb aabb1;
+
+    // No need to use real times here, as this function is only used to
+    // create the BVH heirarchy, and choosing left vs right for a given
+    // hittable doesn't affect correctness.
+    
+    Verify(h0->tryComputeBoundingBox(0, 0, &aabb0));
+    Verify(h1->tryComputeBoundingBox(0, 0, &aabb1));
+
+    return aabb0.min.elements[axis] < aabb1.min.elements[axis] ? -1 : aabb0.min.elements[axis] == aabb1.min.elements[axis] ? 0 : 1;
+}
+
+static int compareByX(IHittable * const& h0, IHittable * const& h1) { return compareByAxis(h0, h1, 0); }
+static int compareByY(IHittable * const& h0, IHittable * const& h1) { return compareByAxis(h0, h1, 1); }
+static int compareByZ(IHittable * const& h0, IHittable * const& h1) { return compareByAxis(h0, h1, 2); }
+
+BvhNode * buildBvh(IHittable ** aHittable, int cHittable)
+{
+    Assert(cHittable > 2);
+
+    if (cHittable == 2)
+    {
+        return new BvhNode(*aHittable, *(aHittable + 1));
+    }
+    else
+    {
+        int axis = rand() % 3;
+        bubbleSort(
+            aHittable,
+            cHittable,
+            axis == 0 ? compareByX : axis == 1 ? compareByY : compareByZ);
+
+        int cLeft = cHittable / 2;
+        int cRight = cHittable - cLeft;
+
+
+        IHittable * left = nullptr;
+        if (cLeft == 1)
+        {
+            left = *aHittable;
+        }
+        else
+        {
+            Assert(cLeft > 1);
+            left = buildBvh(aHittable, cLeft);
+        }
+
+        IHittable * right = nullptr;
+        if (cRight == 1)
+        {
+            right = *(aHittable + cLeft);
+        }
+        else
+        {
+            Assert(cRight > 1);
+            right = buildBvh(aHittable + cLeft, cRight);
+        }
+        
+        return new BvhNode(left, right); 
+    }
+}
+
+Aabb::Aabb(Vector3 p0, Vector3 p1)
+{
+	min.x = fmin(p0.x, p1.x);
+	min.y = fmin(p0.y, p1.y);
+	min.z = fmin(p0.z, p1.z);
+
+	max.x = fmax(p0.x, p1.x);
+	max.y = fmax(p0.y, p1.y);
+	max.z = fmax(p0.z, p1.z);
+}
+
+Aabb::Aabb(Aabb aabb0, Aabb aabb1)
+{
+	min.x = fmin(aabb0.min.x, aabb1.min.x);
+    min.y = fmin(aabb0.min.y, aabb1.min.y);
+    min.z = fmin(aabb0.min.z, aabb1.min.z);
+
+	max.x = fmax(aabb0.max.x, aabb1.max.x);
+    max.y = fmax(aabb0.max.y, aabb1.max.y);
+    max.z = fmax(aabb0.max.z, aabb1.max.z);
+}
+
+bool Aabb::testHit(const Ray & ray, float tMin, float tMax) const
+{
+	for (int axis = 0; axis < 3; axis++)
+	{
+		float invDirection = 1.0f / ray.dir.elements[axis];
+		float deltaDir0 = min.elements[axis] - ray.p0.elements[axis];
+		float deltaDir1 = max.elements[axis] - ray.p0.elements[axis];
+
+		float t0 = deltaDir0 * invDirection;
+		float t1 = deltaDir1 * invDirection;
+
+		// If the ray's direction in this axis is 0, t0 and t1 will both be + or - infinity if the ray origin
+		//	is outside the AABB and will be opposite signed infinities if inside.
+
+		// If the ray origin lies on this axis of the AABB and it's direction in this axis is 0, we will get
+		//	NaN for either t0 or t1, and either + or - infinity for the other. In this case, we may return
+		//	either true or false. We could do extra work to detect and make this scenario consistent (see
+		//	link), but in practice it should not matter:
+		//	https://tavianator.com/fast-branchless-raybounding-box-intersections-part-2-nans/
+
+		// Update window that next axis is allowed to hit in
+
+		tMin = fmax(tMin, fmin(t0, t1));
+		tMax = fmin(tMax, fmax(t0, t1));
+	}
+
+	return tMax > fmax(tMin, 0);
 }
