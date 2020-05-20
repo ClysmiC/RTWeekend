@@ -173,13 +173,13 @@ struct BvhNode : public IHittable
     IHittable * right;
     Aabb aabb;
 
-    BvhNode(IHittable * left, IHittable * right);
+    BvhNode(IHittable * left, IHittable * right, float time0, float time1);
 
     bool testHit(const Ray & ray, float tMin, float tMax, HitRecord * hitOut) const override;
     bool tryComputeBoundingBox(float t0, float t1, Aabb * aabbOut) const override;
 };
 
-BvhNode * buildBvh(IHittable ** aHittable, int cHittable);
+BvhNode * buildBvh(IHittable ** aHittable, int cHittable, float time0, float time1);
 
 struct IMaterial
 {

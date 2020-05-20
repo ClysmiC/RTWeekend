@@ -503,7 +503,7 @@ int main()
 		time0,
 		time1);
 
-	BvhNode * bvh = buildBvh(hittables, countHittables);
+	BvhNode * bvh = buildBvh(hittables, countHittables, time0, time1);
 
 	for (int yPixel = 0; yPixel < heightPixels; yPixel++)
 	{
@@ -558,7 +558,7 @@ bool BvhNode::tryComputeBoundingBox(float t0, float t1, Aabb * aabbOut) const
     return true;
 }
 
-BvhNode::BvhNode(IHittable * left, IHittable * right)
+BvhNode::BvhNode(IHittable * left, IHittable * right, float time0, float time1)
     : IHittable(nullptr)
 	, left(left)
     , right(right)
@@ -566,8 +566,8 @@ BvhNode::BvhNode(IHittable * left, IHittable * right)
     Aabb aabbLeft;
     Aabb aabbRight;
     
-    Verify(left->tryComputeBoundingBox(0, 0, &aabbLeft));
-    Verify(right->tryComputeBoundingBox(0, 0, &aabbRight));
+    Verify(left->tryComputeBoundingBox(time0, time1, &aabbLeft));
+    Verify(right->tryComputeBoundingBox(time0, time1, &aabbRight));
 
     aabb = Aabb(aabbLeft, aabbRight);
 }
@@ -591,13 +591,13 @@ static int compareByX(IHittable * const& h0, IHittable * const& h1) { return com
 static int compareByY(IHittable * const& h0, IHittable * const& h1) { return compareByAxis(h0, h1, 1); }
 static int compareByZ(IHittable * const& h0, IHittable * const& h1) { return compareByAxis(h0, h1, 2); }
 
-BvhNode * buildBvh(IHittable ** aHittable, int cHittable)
+BvhNode * buildBvh(IHittable ** aHittable, int cHittable, float time0, float time1)
 {
     Assert(cHittable > 2);
 
     if (cHittable == 2)
     {
-        return new BvhNode(*aHittable, *(aHittable + 1));
+        return new BvhNode(*aHittable, *(aHittable + 1), time0, time1);
     }
     else
     {
@@ -610,7 +610,6 @@ BvhNode * buildBvh(IHittable ** aHittable, int cHittable)
         int cLeft = cHittable / 2;
         int cRight = cHittable - cLeft;
 
-
         IHittable * left = nullptr;
         if (cLeft == 1)
         {
@@ -619,7 +618,7 @@ BvhNode * buildBvh(IHittable ** aHittable, int cHittable)
         else
         {
             Assert(cLeft > 1);
-            left = buildBvh(aHittable, cLeft);
+            left = buildBvh(aHittable, cLeft, time0, time1);
         }
 
         IHittable * right = nullptr;
@@ -630,10 +629,10 @@ BvhNode * buildBvh(IHittable ** aHittable, int cHittable)
         else
         {
             Assert(cRight > 1);
-            right = buildBvh(aHittable + cLeft, cRight);
+            right = buildBvh(aHittable + cLeft, cRight, time0, time1);
         }
         
-        return new BvhNode(left, right); 
+        return new BvhNode(left, right, time0, time1); 
     }
 }
 
